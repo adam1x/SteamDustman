@@ -35,7 +35,7 @@ def dump():
     logging.info('==============================================')
     logging.info("Starting...")
 
-    apps = get_hidden_apps(category_file)
+    hidden_apps, visible_apps = get_hidden_and_visible_apps(category_file)
     packages_to_apps, apps_to_packages = build_app_package_dicts(licenses_file)
 
     with requests.Session() as session:
@@ -45,22 +45,26 @@ def dump():
             COOKIES_STEAM_LOGIN_SECURE_KEY: steam_login_secure
         })
 
-        for app in apps:
+        for app in hidden_apps:
             if app in apps_to_packages:
-                remove_app(app, apps_to_packages[app], sessionid, session, packages_to_apps)
+                remove_app(app, apps_to_packages[app], sessionid, session, packages_to_apps, visible_apps)
 
 
-def get_hidden_apps(steam_lib_category_file):
-    result = []
+# returns two sets: hidden apps, and visible apps
+def get_hidden_and_visible_apps(steam_lib_category_file):
+    hidden_apps = set()
+    visible_apps = set()
 
     with open(steam_lib_category_file) as f:
         configs = vdf.load(f)
         apps = configs['UserRoamingConfigStore']['Software']['Valve']['Steam']['apps']
         for app, config in apps.items():
             if config.get(LIB_HIDDEN_TAG) == LIB_HIDDEN_TRUE:
-                result.append(app)
+                hidden_apps.add(app)
+            else:
+                visible_apps.add(app)
 
-    return result
+    return hidden_apps, visible_apps
 
 
 # returns two dicts: package => apps, and app => packages
@@ -111,9 +115,16 @@ def build_app_package_dicts(steam_lib_licenses_file):
 # sessionid: current session id
 # session: a Requests.Session object
 # packages_to_apps: a dictionary mapping ids of packages to ids of their apps
-def remove_app(app, packages, sessionid, session, packages_to_apps):
+# visible_apps: set of all non-hidden apps
+def remove_app(app, packages, sessionid, session, packages_to_apps, visible_apps):
     for package in packages:
-        if len(packages_to_apps[package]) > 1:
+        package_apps = packages_to_apps[package]
+        if len(package_apps) > 1:
+            if any(app in visible_apps for app in package_apps):
+                # we cannot just check if app is not in hidden_apps because hidden_apps does not contain DLCs or Tools,
+                # and doing that would skip removing any package that contains DLCs or Tools
+                logging.info("Skipping removing app %s in package %s because this package contains other non-hidden apps", app, package)
+                continue
             logging.info("Removing app %s in package %s, which contains more than one app", app, package)
         remove_package(app, package, sessionid, session)
 
